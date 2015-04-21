@@ -69,7 +69,7 @@ class account_check_deposit(orm.Model):
             'Deposit Date', required=True,
             states={'done': [('readonly', '=', True)]}),
         'journal_id': fields.many2one(
-            'account.journal', 'Journal', domain=[('type', '=', 'bank')],
+            'account.journal', 'Check journal', domain=[('type', '=', 'bank')],
             required=True, states={'done': [('readonly', '=', True)]}),
         'journal_default_account_id': fields.related(
             'journal_id', 'default_debit_account_id', type='many2one',
@@ -109,6 +109,10 @@ class account_check_deposit(orm.Model):
         'is_reconcile': fields.function(
             _compute_check_deposit, multi='deposit', readonly=True,
             string="Reconcile", type="boolean"),
+        'destination_journal_id': fields.many2one(
+            'account.journal', 'Destination journal', domain=[('type', '=', 'bank')],
+            states={'done': [('readonly', '=', True)]}),
+        'destination_account_id': fields.many2one('account.account',u'Destination bank account',),
     }
 
     _defaults = {
@@ -117,7 +121,25 @@ class account_check_deposit(orm.Model):
         'state': 'draft',
         'company_id': lambda self, cr, uid, c: self.pool['res.company'].
         _company_default_get(cr, uid, 'account.check.deposit', context=c),
+        'destination_account_id': lambda s, cr, uid, c: 
+              s.pool.get('res.users').browse(cr, uid, uid).company_id.check_deposit_account_id.id,
     }
+
+    def onchange_destination_journal_id(self, cr, uid, ids,
+                                    destination_journal_id=False,
+                                    context=None):
+        """ Find the default debit account for the selected journal
+        """
+        if context is None:
+            context = {}
+        value = {'destination_account_id': False}
+        if destination_journal_id:
+            journal = self.pool.get('account.journal').browse(cr, uid, destination_journal_id, context=context)
+            value['destination_account_id'] = journal.default_debit_account_id and journal.default_debit_account_id.id \
+                or False
+        return {
+            'value': value,
+        }
 
     def _check_deposit(self, cr, uid, ids):
         for deposit in self.browse(cr, uid, ids):
@@ -216,7 +238,7 @@ class account_check_deposit(orm.Model):
             'name': _('Check Deposit %s') % deposit.name,
             'debit': total_debit,
             'credit': 0.0,
-            'account_id': deposit.company_id.check_deposit_account_id.id,
+            'account_id': deposit.destination_account_id.id,
             'partner_id': False,
             'currency_id': deposit.currency_none_same_company_id.id or False,
             'amount_currency': total_amount_currency,
@@ -247,7 +269,7 @@ class account_check_deposit(orm.Model):
                 to_reconcile_line_ids.append([line.id, move_line_id])
 
             # Create counter-part
-            if not deposit.company_id.check_deposit_account_id:
+            if not deposit.destination_account_id and not deposit.company_id.check_deposit_account_id:
                 raise orm.except_orm(
                     _('Configuration Error:'),
                     _("Missing Account for Check Deposits on the "
